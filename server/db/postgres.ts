@@ -49,11 +49,34 @@ function resultRowCount<Row>(result: Row[]): number {
 }
 
 function wrapSql(sql: SQL): DbClient {
+  // PG-era bug (hit in production 01/10): Bun SQL binds plain JS objects to
+  // text parameters via String() → '[object Object]'. The SQLite adapter
+  // serializes objects/arrays with JSON.stringify in its toBindable; this
+  // wrapper mirrors that contract for the Postgres path so `*_json` columns
+  // (content_json, settings_json, …) round-trip identically on both
+  // dialects. Date → ISO 8601 string for the same reason (Bun #29010 class).
+  //
+  // Binary (Uint8Array/Buffer) values pass through UNTOUCHED: Bun SQL binds
+  // them natively to bytea (verified round-trip) — and JSON.stringify would
+  // corrupt credential ciphertext/iv (AES-GCM blobs). Everything else
+  // non-primitive that isn't binary is treated as JSON data.
+  const isBinary = (value: unknown): boolean =>
+    value instanceof Uint8Array
+    || (typeof Buffer !== 'undefined' && value instanceof Buffer)
+
+  const serialize = (value: unknown): unknown => {
+    if (value === null || value === undefined) return null
+    if (isBinary(value)) return value
+    if (value instanceof Date) return value.toISOString()
+    if (typeof value === 'object') return JSON.stringify(value)
+    return value
+  }
+
   const fn = (async <Row = Record<string, unknown>>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): Promise<DbResult<Row>> => {
-    const rows = await sql<Row[]>(strings, ...values)
+    const rows = await sql<Row[]>(strings, ...values.map(serialize))
     return { rows: rows.map(normalizePostgresRow), rowCount: resultRowCount(rows) }
   }) as DbClient
 
@@ -62,7 +85,7 @@ function wrapSql(sql: SQL): DbClient {
     params?: unknown[],
   ): Promise<DbResult<Row>> => {
     const rows = params !== undefined
-      ? await sql.unsafe<Row[]>(rawSql, params as unknown[])
+      ? await sql.unsafe<Row[]>(rawSql, params.map(serialize))
       : await sql.unsafe<Row[]>(rawSql)
     return { rows: rows.map(normalizePostgresRow), rowCount: resultRowCount(rows) }
   }
