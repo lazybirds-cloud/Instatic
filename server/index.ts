@@ -68,6 +68,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
 
 const server = Bun.serve({
   port: config.port,
+  hostname: '0.0.0.0',
 
   // Disable Bun's default 10-second idle timeout. The agent endpoint streams
   // NDJSON for as long as Claude's loop is running — Claude's "thinking"
