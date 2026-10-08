@@ -360,7 +360,40 @@ function collectImageLayout(
   return image
 }
 
+const SCREENSHOT_CAPTURE_BUDGET_MS = 60_000
+
 async function captureElementScreenshot(
+  root: HTMLElement,
+  captureRegion: CaptureRegion,
+  documentRegion: CaptureRegion,
+): Promise<AgentScreenshotContext> {
+  // html-to-image re-serializes the DOM and fetches every referenced
+  // asset. On media-heavy pages that can take minutes (or hang on a slow
+  // origin) — far past the server's 90s browser-tool relay deadline
+  // (BROWSER_TOOL_TIMEOUT_MS), which aborts the turn and invalidates the
+  // bridge ("The AI tool bridge is no longer active", burned live 08/10:
+  // tool result arrived 3m23s after the request). The capture races a
+  // hard 60s budget: a slow screenshot degrades to 'timeout', never to
+  // a dead bridge. cacheBust is OFF — deterministic capture wants the
+  // browser cache, not re-downloads.
+  const budget = Promise.race([
+    captureElementScreenshotInner(root, captureRegion, documentRegion),
+    new Promise<AgentScreenshotContext>((resolve) =>
+      setTimeout(
+        () =>
+          resolve(
+            unavailableScreenshot(
+              'Screenshot capture timed out (60s budget). The page may reference assets that never resolved.',
+            ),
+          ),
+        SCREENSHOT_CAPTURE_BUDGET_MS,
+      ),
+    ),
+  ])
+  return budget
+}
+
+async function captureElementScreenshotInner(
   root: HTMLElement,
   captureRegion: CaptureRegion,
   documentRegion: CaptureRegion,
@@ -385,7 +418,7 @@ async function captureElementScreenshot(
     // translate that complete document behind a target-sized canvas instead.
     const documentElement = root.ownerDocument.documentElement
     const options: Parameters<typeof toCanvas>[1] = {
-      cacheBust: true,
+      cacheBust: false,
       pixelRatio,
       imagePlaceholder: '',
       width: captureRegion.width,

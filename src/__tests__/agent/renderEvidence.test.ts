@@ -191,7 +191,7 @@ describe('captureAgentRenderSnapshot — on-demand browser bridge', () => {
     expect(body.style.transform).not.toBe('')
     expect(call.options).not.toHaveProperty('backgroundColor')
     expect(call.options).toMatchObject({
-      cacheBust: true,
+      cacheBust: false,
       imagePlaceholder: '',
       pixelRatio: 1568 / 2000,
       width: 2000,
@@ -271,7 +271,7 @@ describe('captureAgentRenderSnapshot — on-demand browser bridge', () => {
     expect(body.style.transform).not.toBe('')
     expect(call.options).not.toHaveProperty('backgroundColor')
     expect(call.options).toMatchObject({
-      cacheBust: true,
+      cacheBust: false,
       imagePlaceholder: '',
       pixelRatio: 1568 / 2400,
       width: 1440,
