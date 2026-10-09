@@ -94,3 +94,30 @@ describe('chatCompletions shared adapter', () => {
     expect(result.toolCalls[0]).toMatchObject({ name: 'insertHtml' })
   })
 })
+
+// LAZ 09/10: replayed assistant tool_calls must carry VALID JSON arguments.
+// LiteLLM (<=v1.103) crashes its streaming wrapper ('NoneType' __aiter__ -> 500)
+// when a replayed tool_call holds malformed args like '{}'+'{}' = '{}{}' —
+// which GLM-5.3-Flash emitted live under heavy context. finish() now
+// serializes the PARSED input instead of replaying raw fragments.
+describe('chatCompletions shared adapter', () => {
+  it('finish() replays sanitized JSON tool arguments, not raw fragments', () => {
+    const translator = new ChatCompletionsTurnTranslator()
+    const tcChunk = (frag: string) => ({
+      choices: [{
+        index: 0,
+        delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'site_list_modules', arguments: frag } }] },
+        finish_reason: null,
+      }],
+    })
+    const events1 = translator.translate(frame(tcChunk('{}')))
+    const events2 = translator.translate(frame(tcChunk('{}')))
+    const events3 = translator.translate(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }))
+    const turn = translator.finish()
+    expect(turn.assistantMessage).not.toBeNull()
+    const replay = turn.assistantMessage![0] as { role: string; tool_calls: { function: { arguments: string } }[] }
+    expect(replay.tool_calls).toHaveLength(1)
+    expect(() => JSON.parse(replay.tool_calls[0]!.function.arguments)).not.toThrow()
+    expect(replay.tool_calls[0]!.function.arguments).toBe('{}')
+  })
+})
