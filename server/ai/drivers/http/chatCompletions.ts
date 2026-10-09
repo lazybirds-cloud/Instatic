@@ -301,10 +301,20 @@ export class ChatCompletionsTurnTranslator implements TurnTranslator<ChatTurn> {
     for (const index of this.order) {
       const acc = this.toolsByIndex.get(index)!
       toolCalls.push({ id: acc.id, name: acc.name || 'tool', input: parseToolArguments(acc.arguments) })
+      // Replay args MUST be valid JSON: LiteLLM (≤1.103) crash-loops its
+      // streaming wrapper when a replayed assistant tool_call carries
+      // malformed arguments (e.g. '{}{}' emitted by GLM-5.3-Flash under
+      // heavy context, live 09/10) — async_data_generator dies on the
+      // parser's broken output and the client gets 500
+      // "'NoneType' object has no attribute '__aiter__'". Serialize the
+      // PARSED input back to a clean string instead of replaying raw.
       chatToolCalls.push({
         id: acc.id,
         type: 'function',
-        function: { name: acc.name || 'tool', arguments: acc.arguments || '{}' },
+        function: {
+          name: acc.name || 'tool',
+          arguments: JSON.stringify(parseToolArguments(acc.arguments) ?? {}),
+        },
       })
     }
 
