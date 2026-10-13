@@ -27,6 +27,7 @@ import {
   htmlAttributesControl,
 } from '@modules/base/shared/htmlAttributes'
 import { htmlAttributesAttr } from '@core/publisher'
+import { normalizeHtmlAttributes } from '@core/htmlAttributes'
 import { buildMediaSrcset } from '@modules/base/utils/mediaAttrs'
 import { ImageEditor } from './ImageEditor'
 import { shouldUseBlurPlaceholder } from './placeholder'
@@ -175,7 +176,19 @@ export const ImageModule: ModuleDefinition<ImageProps> = {
   render: (props) => {
     const src = safeUrl(props.src)
     if (!src) return { html: '' }
-    const htmlAttrs = htmlAttributesAttr(props.htmlAttributes)
+    // Intrinsic-size fallback (LazyBirds import burn 12/10): the source
+    // HTML's width/height <img> attributes now ride in htmlAttributes
+    // (the import walker no longer treats them as module-generated for
+    // base.image). SVGs never enter the responsive-variant pipeline so
+    // media dims stay null — without this, imported SVG logos inside flex
+    // rows collapse to 0×0. Strip them from the passthrough bag and emit
+    // as the canonical width/height attributes ONLY when the media
+    // library has no probed dimensions (probed dims always win).
+    const { width: attrWidth, height: attrHeight, ...passthroughAttrs } =
+      normalizeHtmlAttributes(props.htmlAttributes)
+    const htmlAttrs = htmlAttributesAttr(passthroughAttrs)
+    const attrWidthNum = toAttrNumber(attrWidth)
+    const attrHeightNum = toAttrNumber(attrHeight)
 
     // Alt text comes exclusively from the library asset — the library is
     // the single source of truth for accessibility metadata. Edited in
@@ -214,6 +227,8 @@ export const ImageModule: ModuleDefinition<ImageProps> = {
     if (sizes) attrs.push(`sizes="${sizes}"`)
     if (width !== null) attrs.push(`width="${width}"`)
     if (height !== null) attrs.push(`height="${height}"`)
+    if (width === null && attrWidthNum !== null) attrs.push(`width="${attrWidthNum}"`)
+    if (height === null && attrHeightNum !== null) attrs.push(`height="${attrHeightNum}"`)
     attrs.push(`loading="${loading}"`)
     attrs.push(`decoding="${decoding}"`)
     if (fetchPriority !== 'auto') attrs.push(`fetchpriority="${fetchPriority}"`)
@@ -231,3 +246,16 @@ export const ImageModule: ModuleDefinition<ImageProps> = {
 }
 
 registry.registerOrReplace(ImageModule)
+
+/**
+ * Intrinsic-size fallback helper: coerce a source width/height HTML
+ * attribute value into a strict non-negative integer string, or null.
+ * Rejects anything the publisher wouldn't want inside the attribute
+ * (fractions/units/CSS expressions) — import-walker output is trusted
+ * shape-wise but this is a general prop bag.
+ */
+function toAttrNumber(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const raw = String(value).trim()
+  return /^\d{1,6}$/.test(raw) ? raw : null
+}

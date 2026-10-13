@@ -138,13 +138,11 @@ const MODULE_GENERATED_ATTRIBUTE_NAMES: Record<string, readonly string[]> = {
     'alt',
     'decoding',
     'fetchpriority',
-    'height',
     'loading',
     'sizes',
     'src',
     'srcset',
     'style',
-    'width',
   ],
   'base.link': ['href', 'rel', 'target'],
 }
