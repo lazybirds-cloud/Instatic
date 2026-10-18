@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { Value } from '@sinclair/typebox/value'
 import { createCapabilityTestHarness, type CapabilityTestHarness } from '../../../../src/__tests__/helpers/capabilityHarness'
 import { createDataRow, createDataTable } from '../../../repositories/data'
 import type { CoreCapability } from '@core/capabilities'
@@ -56,6 +57,19 @@ describe('content read tools', () => {
       'projects',
     ])
     expect(result.collections.every((collection) => collection.kind === 'postType')).toBe(true)
+
+    const schema = tool.outputSchema
+    expect(schema).toBeTruthy()
+    expect(Value.Check(schema!, result)).toBe(true)
+  })
+
+  it('says the document reads accept a reusable data table too', () => {
+    // data_* can write rows but not read them back; these two are the read
+    // path, and an agent only finds that out from the description.
+    const list = contentReadTools.find((t) => t.name === 'content_list_documents')
+    const get = contentReadTools.find((t) => t.name === 'content_get_document')
+    expect(list?.description).toContain('reusable data table')
+    expect(get?.description).toContain('reusable data table')
   })
 })
 
