@@ -302,8 +302,10 @@ describe('base.image — <img> elements', () => {
   })
 
   it('keeps generated attributes out of htmlAttributes while preserving the rest', () => {
+    // width/height stay in the bag: the image module re-emits them as the
+    // intrinsic-size fallback when the media library has no probed dims.
     const props = singleProps('<img src="/a.png" alt="x" loading="eager" width="10" height="10" data-track="hero">')
-    expect(props.htmlAttributes).toEqual({ 'data-track': 'hero' })
+    expect(props.htmlAttributes).toEqual({ 'data-track': 'hero', width: '10', height: '10' })
   })
 
   it('<img> with empty src → src is empty string', () => {

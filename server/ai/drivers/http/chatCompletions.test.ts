@@ -110,9 +110,9 @@ describe('chatCompletions shared adapter', () => {
         finish_reason: null,
       }],
     })
-    const events1 = translator.translate(frame(tcChunk('{}')))
-    const events2 = translator.translate(frame(tcChunk('{}')))
-    const events3 = translator.translate(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }))
+    translator.translate(frame(tcChunk('{}')))
+    translator.translate(frame(tcChunk('{}')))
+    translator.translate(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }))
     const turn = translator.finish()
     expect(turn.assistantMessage).not.toBeNull()
     const replay = turn.assistantMessage![0] as { role: string; tool_calls: { function: { arguments: string } }[] }
