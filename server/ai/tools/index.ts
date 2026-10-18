@@ -1,8 +1,8 @@
 /**
  * Tool registry root — selects the right toolset for a chat scope.
  *
- * `site`, `content`, and `data` scopes have tools registered. `plugin` is a
- * reserved scope with no toolset yet.
+ * `site`, `content`, and `data` scopes have tools registered (`site` also
+ * carries the data toolset). `plugin` is a reserved scope with no toolset yet.
  *
  * Adding a new scope:
  *   1. Create `server/ai/tools/<scope>/` with its tool files + index.ts.
@@ -38,28 +38,36 @@ export interface ToolsetOptions {
   uploadsDir?: string
 }
 
+/**
+ * Schema + row tools, all server-resolved. The MCP registry builds its own
+ * copy with a connector-attributed runtime (see server/ai/mcp/registry.ts);
+ * the in-app agent gets the same tools with an uploads dir but no connector
+ * id, so its writes audit as `source: 'agent'`.
+ *
+ * `dataTools()` writes rows but cannot read one back, so the three
+ * table-scoped content reads come along — they resolve a reusable data
+ * table's id just as they resolve a post type's. Without them an agent could
+ * create a table and fill it, then have no way to see what it wrote.
+ */
+function dataScopeTools(options: ToolsetOptions): AiTool[] {
+  return [
+    ...dataTools(options.uploadsDir ? { uploadsDir: options.uploadsDir } : undefined),
+    ...tableScopedReadTools.map((t) => ({ ...t, mutates: false })),
+  ]
+}
+
 function scopeToolset(scope: ToolScope, options: ToolsetOptions = {}): AiTool[] {
   switch (scope) {
     case 'site':
-      return siteTools
+      // The site editor is where operators actually talk to the agent, and
+      // there is no Data-workspace chat panel, so the data toolset rides here
+      // too: building a page often means creating and filling the table its
+      // loop reads from. All server-resolved, no name collisions.
+      return [...siteTools, ...dataScopeTools(options)]
     case 'content':
       return contentTools
     case 'data':
-      // Schema + row tools, all server-resolved. The MCP registry builds its
-      // own copy with a connector-attributed runtime (see
-      // server/ai/mcp/registry.ts); the in-app agent gets the same tools with
-      // an uploads dir but no connector id, so its writes audit as
-      // `source: 'agent'`.
-      //
-      // `dataTools()` writes rows but cannot read one back, so the three
-      // table-scoped content reads come along — they resolve a reusable data
-      // table's id just as they resolve a post type's. Without them an agent
-      // in the Data workspace could create a table and fill it, then have no
-      // way to see what it wrote.
-      return [
-        ...dataTools(options.uploadsDir ? { uploadsDir: options.uploadsDir } : undefined),
-        ...tableScopedReadTools.map((t) => ({ ...t, mutates: false })),
-      ]
+      return dataScopeTools(options)
     case 'plugin':
       // Reserved: no plugin-scope toolset yet.
       return []

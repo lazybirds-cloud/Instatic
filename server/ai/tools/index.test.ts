@@ -49,4 +49,12 @@ describe('selectToolsForScope', () => {
     expect(readOnly).toContain('content_list_documents')
     expect(readOnly).not.toContain('data_create_rows')
   })
+
+  it('gives the site editor the data toolset too (no Data chat panel exists)', () => {
+    const site = selectToolsForScope('site', FULL).map((t) => t.name)
+    const data = selectToolsForScope('data', FULL).map((t) => t.name)
+    for (const name of data) expect(site).toContain(name)
+    expect(site).toContain('site_get_node_html')
+    expect(new Set(site).size).toBe(site.length)
+  })
 })
