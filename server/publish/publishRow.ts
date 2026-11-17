@@ -190,3 +190,27 @@ export function retractDataRowArtefacts(
     if (options.wasPublished) await removeArtefactsLoopingOverTable(db, uploadsDir, row.tableId)
   })
 }
+
+/**
+ * Remove a data row's baked Layer-A artefact from the active slot. Called when
+ * a row leaves public visibility (unpublish, revert-to-draft, soft-delete) so
+ * the static file stops being served — Layer A reads the disk slot with no
+ * publishVersion awareness, so without this a retracted row stays public
+ * (ISS-039). The route is resolved WITHOUT the `deleted_at is null` filter so
+ * it still works after a soft delete. Best-effort: unresolved route or missing
+ * file is a no-op (removeArtefactInPlace never throws on a missing file).
+ *
+ * LazyBirds fork: the MCP data lifecycle tools call this directly (fire-and-
+ * forget, `.catch()`-guarded), deliberately WITHOUT the publish lock — the
+ * caller may already hold a DB transaction and the lock must not nest.
+ */
+export async function removeDataRowArtefact(
+  db: DbClient,
+  uploadsDir: string,
+  rowId: string,
+  slug: string,
+): Promise<void> {
+  const routeBase = await getRowTableRouteBase(db, rowId)
+  if (routeBase === null) return
+  await removeArtefactInPlace(uploadsDir, publicDataPath(routeBase, slug))
+}
