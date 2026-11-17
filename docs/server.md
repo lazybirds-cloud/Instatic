@@ -26,7 +26,8 @@ The server is a single `Bun.serve` process that boots the DB, runs migrations, a
 ```text
 server/index.ts
     │
-    ├─→ readServerConfig()                   ← env vars: PORT, DATABASE_URL, UPLOADS_DIR, STATIC_DIR, PUBLIC_ORIGIN, TRUSTED_PROXY_CIDRS, NPM_REGISTRY_URL
+    ├─→ readServerConfig()                   ← env vars: PORT, DATABASE_URL, UPLOADS_DIR, STATIC_DIR, PUBLIC_ORIGIN, TRUSTED_PROXY_CIDRS, NPM_REGISTRY_URL, INSTATIC_MANAGER_TOKEN, INSTATIC_MANAGER_DIR
+    ├─→ applyPendingRestore(...)             ← server/manager/pending.ts: a restore staged through the Manager API takes effect here, before the DB opens
     ├─→ configureNpmRegistryUrl(...)         ← server/registry/config.ts: one registry for browsing, resolving and bun install
     │
     ├─→ createDbClient(DATABASE_URL)         ← server/db/index.ts
@@ -43,20 +44,25 @@ server/index.ts
     │
     ├─→ createCollabRelay(db)                ← server/collab/relay.ts: live Y docs,
     │                                           debounced persistence, reset protocol
-    ├─→ createCollabSocketLayer(relay)       ← server/collab/socket.ts: multiplexed
-    │                                           y-protocols wire + awareness
-    ├─→ Bun.serve({ fetch: req => handleServerRequest(req, runtime),
-    │               websocket: collabSocket.handlers })
-    │     (the co-editing socket `/admin/api/cms/site-socket` upgrades at this
-    │      boundary — see server/collab/socket.ts; everything else goes
-    │      through the router)
-    │
-    └─→ collabSocket.setPublisher(server)    ← wire the collab fan-out to Bun pub/sub
+    ├─→ createCollabSocketLayer(relay, db)   ← server/collab/socket.ts: multiplexed
+    │                                           authorized y-protocols wire + awareness
+    └─→ Bun.serve({ fetch: req => handleServerRequest(req, runtime),
+                    websocket: collabSocket.handlers })
+          (the co-editing socket `/admin/api/cms/site-socket` upgrades at this
+           boundary — see server/collab/socket.ts; everything else goes
+           through the router)
 ```
 
 Boot is sequential and fail-fast. If migrations fail, the process exits. If a plugin's `activate` throws, the host logs `[plugin:<id>]` and continues — one bad plugin doesn't bring the server down.
 
 ---
+
+The HTTP server accepts request bodies up to 1 GiB, matching Site Import's
+archive input limit. CMS archive imports stream media entries to disk; their
+manifest has a separate 256 MiB limit. JSON bodies retain a 128 MiB default
+limit in `readValidatedBody`, enforced while streaming even without a
+`Content-Length` header; endpoints can set a smaller limit. Oversized JSON
+requests receive HTTP 413.
 
 ## Routing
 
@@ -545,7 +551,8 @@ Server-side publishing helpers live in `server/publish/`:
 | `renderCache.ts`                  | Layer B. Bounded LRU keyed by `(urlPath, canonicalQuery)`, entries versioned. Single-flight on cache miss. `bumpPublishVersion()` invalidates lazily; version captured at render start so mid-flight publishes discard without caching stale HTML. |
 | `holeRuntime.ts`                  | Layer C client-side runtime (~1.1 KB). Exports `runInstaticHoleRuntime` (TS source) and `HOLE_RUNTIME_JS` (IIFE-serialized for browser delivery). |
 | `publishSite.ts`                  | Full-site publish orchestrator (`publishDraftSite`): phase-1 builds, the short `persistSitePublish` transaction, Layer A bake + slot swap, Layer B bump. |
-| `publishRow.ts`                   | Per-row publish orchestrator (`publishDataRow`) + `removeDataRowArtefact`: persist via the data repository, in-place artefact update, Layer B bump. |
+| `publishRow.ts`                   | Per-row publish orchestrator (`publishDataRow`) + `retractDataRowArtefacts`: page rows use the site pipeline with published shared resources and just the selected draft; other rows use an in-place artefact update and Layer B bump. Both also drop the baked pages that loop over the row's table. |
+| `loopArtefacts.ts`                | `removeArtefactsLoopingOverTable`: removes from the active slot every baked route whose render tree loops over a table, so listings follow row changes without a site publish. |
 | `publicRenderer.ts`               | `renderPublishedSnapshot`, `renderPublishedDataRowTemplate` — snapshot-aware wrappers around `publishPage`. |
 | `publishedHtmlPipeline.ts`        | Plugin frontend-asset injection + `publish.html` filter chain. Runs at publish time for every baked page (complete doc or hole shell); also runs in the Layer B factory for query-string / live renders (cached). |
 | `siteCssBundle.ts`                | Per-site reset / framework / style CSS bundles (hashed filenames).  |
