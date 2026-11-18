@@ -90,3 +90,10 @@ docs/superpowers/
 .factory/
 .trae/
 .windsurf/
+
+# LazyBirds build workspace
+.dockerbuild/
+Dockerfile.arm64
+Dockerfile.bak
+Dockerfile.prebuilt
+*.bun-build

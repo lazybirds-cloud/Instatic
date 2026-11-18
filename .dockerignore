@@ -9,3 +9,4 @@ compose*.yml
 Caddyfile
 playwright.config.ts
 release
+.dockerbuild/
