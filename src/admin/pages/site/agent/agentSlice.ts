@@ -19,7 +19,7 @@
 import { nanoid } from 'nanoid'
 import type { EditorStoreSliceCreator } from '@site/store/types'
 import { ApiError, isAbortError, responseErrorMessage, withAmbientHeaders } from '@core/http'
-import type { AiChatRequestBody } from '@core/ai'
+import type { AiChatRequestBody, AiUserContentBlock } from '@core/ai'
 import { pushToast } from '@ui/components/Toast'
 import {
   listConversations,
@@ -689,6 +689,43 @@ export function createAgentSlice(
           set({ isAgentStreaming: false })
         }
       }
+    },
+
+    /**
+     * Retry the last user turn: remove the failed reply and re-send the same
+     * content. The failed assistant block (plus any half-written tool state)
+     * goes away with the truncation — the conversation replays from the same
+     * user message with a clean attempt.
+     */
+    async retryLastAgentTurn() {
+      if (
+        get().isAgentStreaming
+        || get().isAgentConversationPending
+        || get().isAgentProviderPending
+      ) return { accepted: false }
+      const msgs = get().agentMessages
+      let userIdx = -1
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') { userIdx = i; break }
+      }
+      if (userIdx === -1) return { accepted: false }
+      const userMsg = msgs[userIdx]
+      const content: AiUserContentBlock[] = []
+      for (const block of userMsg.blocks) {
+        if (block.kind === 'image') {
+          const comma = block.src.indexOf(',')
+          content.push({
+            kind: 'image',
+            mimeType: block.mimeType,
+            data: comma === -1 ? '' : block.src.slice(comma + 1),
+          })
+        } else if (block.kind === 'text') {
+          content.push({ kind: 'text', text: block.text })
+        }
+      }
+      if (content.length === 0) return { accepted: false }
+      set((state) => { state.agentMessages = state.agentMessages.slice(0, userIdx) })
+      return get().sendAgentMessage(content)
     },
   }
   }

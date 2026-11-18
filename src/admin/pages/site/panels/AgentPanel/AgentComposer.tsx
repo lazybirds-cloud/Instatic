@@ -126,7 +126,7 @@ export function AgentComposer({
     const pending = attachments.current()
     if (!text && pending.length === 0) return
     if (pending.some((entry) => entry.status === 'processing')) {
-      pushToast({ kind: 'error', title: 'Images are still processing', body: 'Wait a moment, then send again.' })
+      pushToast({ kind: 'error', title: 'Imagens ainda em processamento', body: 'Aguarde um momento e envie de novo.' })
       return
     }
     if (pending.some((entry) => entry.status === 'error' || !entry.block)) return
@@ -176,15 +176,15 @@ export function AgentComposer({
     || submitting
     || imageBlocksSend
     || modelCannotRunAgent
-  let sendTooltip = 'Send'
-  if (lockReason === 'setup') sendTooltip = 'Add AI credentials first'
-  else if (lockReason === 'chooseModel') sendTooltip = 'Choose a model first'
-  else if (modelCannotRunAgent) sendTooltip = 'Choose an agent-capable model'
-  else if (imageStatus === 'processing') sendTooltip = 'Preparing image'
-  else if (imageStatus === 'checking-model') sendTooltip = 'Checking image support'
-  else if (imageStatus === 'model-error') sendTooltip = 'Could not verify image support'
-  else if (imageStatus === 'unsupported-model') sendTooltip = 'Choose a vision-capable model'
-  else if (imageStatus === 'error') sendTooltip = 'Remove the failed image'
+  let sendTooltip = 'Enviar'
+  if (lockReason === 'setup') sendTooltip = 'Adicione credenciais de IA primeiro'
+  else if (lockReason === 'chooseModel') sendTooltip = 'Escolha um modelo primeiro'
+  else if (modelCannotRunAgent) sendTooltip = 'Escolha um modelo compatível com o agente'
+  else if (imageStatus === 'processing') sendTooltip = 'Preparando imagem'
+  else if (imageStatus === 'checking-model') sendTooltip = 'Verificando suporte a imagens'
+  else if (imageStatus === 'model-error') sendTooltip = 'Não foi possível verificar o suporte a imagens'
+  else if (imageStatus === 'unsupported-model') sendTooltip = 'Escolha um modelo com visão'
+  else if (imageStatus === 'error') sendTooltip = 'Remova a imagem que falhou'
 
   return (
     <div className={styles.inputBar}>
@@ -198,21 +198,21 @@ export function AgentComposer({
         />
       )}
       {hasAttachments && imageStatus === 'checking-model' && (
-        <p role="status" className={styles.attachmentNotice}>Checking whether this model accepts images…</p>
+        <p role="status" className={styles.attachmentNotice}>Verificando se este modelo aceita imagens…</p>
       )}
       {hasAttachments && imageStatus === 'unsupported-model' && (
         <p role="alert" className={styles.attachmentWarning}>
-          Choose a vision-capable model or remove the image.
+          Escolha um modelo com capacidade de visão ou remova a imagem.
         </p>
       )}
       {hasAttachments && imageStatus === 'model-error' && (
         <p role="alert" className={styles.attachmentWarning}>
-          Could not verify image support for this model. Choose another model or remove the image.
+          Não foi possível verificar o suporte a imagens deste modelo. Escolha outro modelo ou remova a imagem.
         </p>
       )}
       {modelCannotRunAgent && (
         <p role="alert" className={styles.attachmentWarning}>
-          Choose an agent-capable model that supports tool calling.
+          Escolha um modelo compatível com o agente (tool calling).
         </p>
       )}
       <form
@@ -227,11 +227,11 @@ export function AgentComposer({
             ref={inputRef}
             value={draft}
             placeholder={lockReason === 'setup'
-              ? 'Add AI credentials to start chatting'
+              ? 'Adicione credenciais de IA para começar'
               : lockReason === 'chooseModel'
-                ? 'Choose a model below to start'
-                : 'Tell me what to build… (attach images or press Enter to send)'}
-            aria-label="Message to AI assistant"
+                ? 'Escolha um modelo abaixo para começar'
+                : 'Me diga o que construir… (anexe imagens ou pressione Enter para enviar)'}
+            aria-label="Mensagem para o assistente de IA"
             rows={2}
             resize="none"
             disabled={composerLocked || conversationPending || providerPending || submitting}
@@ -274,9 +274,9 @@ export function AgentComposer({
                   || submitting
                   || attachments.pending.length >= AI_USER_IMAGE_MAX_PER_MESSAGE,
                 tooltip: attachments.pending.length >= AI_USER_IMAGE_MAX_PER_MESSAGE
-                  ? `Maximum ${AI_USER_IMAGE_MAX_PER_MESSAGE} images per message`
-                  : 'Attach images',
-                'aria-label': 'Attach images',
+                  ? `Máximo de ${AI_USER_IMAGE_MAX_PER_MESSAGE} imagens por mensagem`
+                  : 'Anexar imagens',
+                'aria-label': 'Anexar imagens',
               }}
             >
               <ImageSolidIcon size={14} aria-hidden="true" />
@@ -288,8 +288,8 @@ export function AgentComposer({
                 size="sm"
                 iconOnly
                 onClick={abortAgent}
-                tooltip="Stop"
-                aria-label="Stop"
+                tooltip="Parar"
+                aria-label="Parar"
               >
                 <SquareSolidIcon size={14} />
               </Button>
@@ -301,7 +301,7 @@ export function AgentComposer({
                 iconOnly
                 disabled={sendDisabled}
                 tooltip={sendTooltip}
-                aria-label="Send"
+                aria-label="Enviar"
               >
                 <SendSolidIcon size={14} />
               </Button>

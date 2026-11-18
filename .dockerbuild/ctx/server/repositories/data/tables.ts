@@ -1,0 +1,531 @@
+/**
+ * CRUD for data tables.
+ *
+ *   listDataTables       — read every non-deleted table of a branch. System
+ *                          tables sort first in a fixed order (pages, posts,
+ *                          components, layouts); custom tables follow, ordered
+ *                          by created_at.
+ *   getDataTable         — read a single table by id (or null)
+ *   getDataTableBySlug   — read a single table by slug (indexed; or null)
+ *   createDataTable      — insert a new table
+ *   updateDataTable      — partial update (all fields optional)
+ *   softDeleteDataTable      — set deleted_at; refuses if rows exist or if the
+ *                             table is the seeded `posts` post-type
+ *   insertDataTableIfAbsent  — insert only if id absent; used by merge-add / merge-overwrite
+ *
+ * Ids in and out are LOGICAL; the branch comes from `scope` (see
+ * `@core/branches`). System tables keep their well-known logical ids
+ * (`pages`, `posts`, `components`, `layouts`) on every branch.
+ */
+import { nanoid } from 'nanoid'
+import { physicalId } from '@core/branches'
+import type { DbClient } from '../../db/client'
+import type { BranchScope } from '../../branches/scope'
+import { countDataRows } from './rows/read'
+import { normalizeRouteBase } from '@core/templates/templateMatching'
+import { buildPostTypeDefaultFields, normalizeDataTableFields } from '@core/data/fields'
+import { POST_TYPE_MANDATORY_FIELD_IDS } from '@core/data/schemas'
+import type {
+  DataField,
+  DataTable,
+  DataTableKind,
+  DataTableListItem,
+} from '@core/data/schemas'
+import { isoDate, nowIso } from '@core/utils/isoDate'
+
+interface CreateDataTableInput {
+  id?: string
+  name: string
+  slug: string
+  kind?: DataTableKind
+  routeBase?: string
+  singularLabel: string
+  pluralLabel: string
+  primaryFieldId?: string
+  fields?: DataField[]
+  createdByUserId?: string | null
+  /** Plugin id when created through `cms.content.tables.create`; null otherwise. */
+  createdByPluginId?: string | null
+  updatedByUserId?: string | null
+}
+
+interface UpdateDataTableInput {
+  name?: string
+  slug?: string
+  routeBase?: string
+  singularLabel?: string
+  pluralLabel?: string
+  primaryFieldId?: string
+  fields?: DataField[]
+  updatedByUserId?: string | null
+}
+
+interface DataTableRow {
+  logical_id: string
+  name: string
+  slug: string
+  kind: DataTableKind
+  route_base: string
+  singular_label: string
+  plural_label: string
+  primary_field_id: string
+  fields_json?: unknown
+  /**
+   * The `system` column is `not null default 0` (SQLite) / `default false`
+   * (Postgres), so every read carries a concrete value. SQLite surfaces it as
+   * `0`/`1`, Postgres as a boolean — `mapTable` coerces both via `Boolean`.
+   */
+  system: number | boolean
+  created_by_user_id: string | null
+  created_by_plugin_id: string | null
+  updated_by_user_id: string | null
+  /**
+   * Adapters normalize: PG returns Date, SQLite returns ISO string, test fakes
+   * may return either. The mapper coerces both via `isoDate` below.
+   */
+  created_at: string | Date
+  updated_at: string | Date
+}
+
+/**
+ * An empty route base is the persisted sentinel for a non-routable table.
+ * Only an omitted value gets the conventional slug-derived route on create;
+ * callers that explicitly send an empty (or whitespace-only) value are opting
+ * out of public routing and that choice must survive every repository path.
+ */
+function normalizeExplicitRouteBase(routeBase: string): string {
+  const trimmed = routeBase.trim()
+  return trimmed === '' ? '' : normalizeRouteBase(trimmed)
+}
+
+function routeBaseForCreate(routeBase: string | undefined, slug: string): string {
+  return routeBase === undefined
+    ? normalizeRouteBase(slug)
+    : normalizeExplicitRouteBase(routeBase)
+}
+
+function mapTable(row: DataTableRow): DataTable {
+  return {
+    id: row.logical_id,
+    name: row.name,
+    slug: row.slug,
+    kind: row.kind,
+    routeBase: normalizeExplicitRouteBase(row.route_base),
+    singularLabel: row.singular_label,
+    pluralLabel: row.plural_label,
+    primaryFieldId: row.primary_field_id,
+    fields: normalizeDataTableFields(row.fields_json),
+    system: Boolean(row.system),
+    createdByUserId: row.created_by_user_id ?? null,
+    createdByPluginId: row.created_by_plugin_id ?? null,
+    updatedByUserId: row.updated_by_user_id ?? null,
+    createdAt: isoDate(row.created_at),
+    updatedAt: isoDate(row.updated_at),
+  }
+}
+
+export async function listDataTables(db: DbClient, scope: BranchScope): Promise<DataTable[]> {
+  const { rows } = await db<DataTableRow>`
+    select logical_id, name, slug, kind, route_base, singular_label, plural_label,
+           primary_field_id, fields_json, system,
+           created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+    from data_tables
+    where branch_id = ${scope.branchId}
+      and deleted_at is null
+    order by
+      case kind
+        when 'page' then 0
+        when 'postType' then 1
+        when 'component' then 2
+        when 'layout' then 3
+        else 4
+      end,
+      created_at asc
+  `
+  return rows.map(mapTable)
+}
+
+/**
+ * Like `listDataTables` but enriches each table with the current non-deleted
+ * row count. The count is derived via a correlated subselect (one per table)
+ * which is fine given the tiny number of tables.
+ *
+ * SQL is dialect-naive: no Postgres-isms (`::int`, `now()`, `::jsonb`,
+ * `any($N::...)`, `distinct on`) — runs identically on SQLite and Postgres.
+ */
+export async function listDataTablesWithCounts(
+  db: DbClient,
+  scope: BranchScope,
+): Promise<DataTableListItem[]> {
+  const { rows } = await db<DataTableRow & { row_count: number | string }>`
+    select t.logical_id, t.name, t.slug, t.kind, t.route_base, t.singular_label, t.plural_label,
+           t.primary_field_id, t.fields_json, t.system,
+           t.created_by_user_id, t.created_by_plugin_id, t.updated_by_user_id, t.created_at, t.updated_at,
+           coalesce(
+             (select count(*) from data_rows r where r.table_id = t.id and r.deleted_at is null),
+             0
+           ) as row_count
+    from data_tables t
+    where t.branch_id = ${scope.branchId}
+      and t.deleted_at is null
+    order by
+      case t.kind
+        when 'page' then 0
+        when 'postType' then 1
+        when 'component' then 2
+        when 'layout' then 3
+        else 4
+      end,
+      t.created_at asc
+  `
+  return rows.map((row) => ({
+    ...mapTable(row),
+    rowCount: Number(row.row_count ?? 0),
+  }))
+}
+
+export async function getDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  tableId: string,
+): Promise<DataTable | null> {
+  const { rows } = await db<DataTableRow>`
+    select logical_id, name, slug, kind, route_base, singular_label, plural_label,
+           primary_field_id, fields_json, system,
+           created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+    from data_tables
+    where id = ${physicalId(scope.branchId, tableId)}
+      and branch_id = ${scope.branchId}
+      and deleted_at is null
+    limit 1
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}
+
+/**
+ * Read a single non-deleted table by slug. One indexed lookup — the partial
+ * unique index `data_tables_branch_slug_active_idx` covers it — so per-call
+ * code paths (every `cms.content.*` plugin api-call resolves its table this
+ * way) never scan and re-parse the whole table list.
+ */
+export async function getDataTableBySlug(
+  db: DbClient,
+  scope: BranchScope,
+  slug: string,
+): Promise<DataTable | null> {
+  const { rows } = await db<DataTableRow>`
+    select logical_id, name, slug, kind, route_base, singular_label, plural_label,
+           primary_field_id, fields_json, system,
+           created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+    from data_tables
+    where branch_id = ${scope.branchId}
+      and slug = ${slug}
+      and deleted_at is null
+    limit 1
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}
+
+/**
+ * A post type is routable only if it carries the built-in `title`/`slug`
+ * fields: `slugForTable` returns an empty slug for a table without a `slug`
+ * field, and an entry with an empty slug has no public route. The Content UI
+ * seeds those fields client-side, so a table created through any other caller
+ * (the data API, an MCP connector, an import) used to arrive unroutable.
+ * Seeding here makes the invariant hold for every caller instead.
+ *
+ * Only the mandatory two are held — the same rule `keepPostTypeBuiltIns`
+ * enforces on PATCH. The optional built-ins (body, featured media, the SEO
+ * pair) are deliberately removable, and the New collection dialog lets the
+ * author drop them before creating; re-adding them here silently overrode
+ * that choice. A caller that supplies no fields at all still gets the full
+ * canonical set, matching the dialog's starting state.
+ *
+ * Caller-supplied fields win on id collision, so an explicit `title` override
+ * (a different label, say) survives; held built-ins are prepended in their
+ * canonical order.
+ */
+function withPostTypeBuiltIns(kind: DataTableKind | undefined, fields: DataField[]): DataField[] {
+  if (kind !== 'postType') return fields
+  if (fields.length === 0) return buildPostTypeDefaultFields()
+  const supplied = new Set(fields.map((field) => field.id))
+  const canonical = new Map(buildPostTypeDefaultFields().map((field) => [field.id, field]))
+  const held: DataField[] = []
+  for (const id of POST_TYPE_MANDATORY_FIELD_IDS) {
+    if (supplied.has(id)) continue
+    const field = canonical.get(id)
+    if (field) held.push(field)
+  }
+  return held.length === 0 ? fields : [...held, ...fields]
+}
+
+/**
+ * The same invariant, held across a PATCH.
+ *
+ * `fields` is a whole-list replacement, and the natural way to add one custom
+ * field is to send the custom field list — which is exactly the payload that
+ * drops every built-in. Nothing downstream complains: the table saves, the
+ * rows keep their `slug` CELL, and then the next save of any row recomputes
+ * the routable slug through `slugForTable`, which returns '' for a table with
+ * no `slug` field. Every entry in the post type quietly loses its public route.
+ *
+ * Only `title` and `slug` are held. The other built-ins (body, featured media,
+ * the two SEO fields) are deliberately removable — the Data inspector offers
+ * them back under "missing optional built-ins" — and the field editor already
+ * marks the mandatory two undeletable client-side. This is the same rule
+ * enforced where it cannot be bypassed.
+ *
+ * A patch may still relabel or retype `title`/`slug`, and may reorder
+ * anything; it just cannot drop them by omission. The existing definition is
+ * preserved rather than reseeded from the defaults, so a legitimately
+ * customised `title` (relabelled "Recipe name") survives.
+ *
+ * Membership is decided by field ID, not by the `builtIn` flag: on create,
+ * "caller-supplied fields win on id collision" stores an overridden `title`
+ * WITHOUT the flag, and that title is still the one routing depends on.
+ */
+function keepPostTypeBuiltIns(existing: DataTable, next: DataField[]): DataField[] {
+  if (existing.kind !== 'postType') return next
+  const supplied = new Set(next.map((field) => field.id))
+  const current = new Map(existing.fields.map((field) => [field.id, field]))
+  const canonical = new Map(buildPostTypeDefaultFields().map((field) => [field.id, field]))
+
+  const held: DataField[] = []
+  for (const id of POST_TYPE_MANDATORY_FIELD_IDS) {
+    if (supplied.has(id)) continue
+    // Prefer the stored definition; fall back to the canonical default when
+    // the field is absent altogether. That second case REPAIRS a table an
+    // earlier patch already stripped — a post type with no `slug` field is
+    // never a state anyone chose, so the next patch puts it back rather than
+    // faithfully preserving the damage.
+    const field = current.get(id) ?? canonical.get(id)
+    if (field) held.push(field)
+  }
+  return held.length === 0 ? next : [...held, ...next]
+}
+
+export async function createDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  input: CreateDataTableInput,
+): Promise<DataTable> {
+  const fields = withPostTypeBuiltIns(input.kind, normalizeDataTableFields(input.fields ?? []))
+  const logicalId = input.id ?? nanoid()
+  const { rows } = await db<DataTableRow>`
+    insert into data_tables (
+      id,
+      branch_id,
+      name,
+      slug,
+      kind,
+      route_base,
+      singular_label,
+      plural_label,
+      primary_field_id,
+      fields_json,
+      created_by_user_id,
+      created_by_plugin_id,
+      updated_by_user_id
+    )
+    values (
+      ${physicalId(scope.branchId, logicalId)},
+      ${scope.branchId},
+      ${input.name},
+      ${input.slug},
+      ${input.kind ?? 'data'},
+      ${routeBaseForCreate(input.routeBase, input.slug)},
+      ${input.singularLabel},
+      ${input.pluralLabel},
+      ${input.primaryFieldId ?? 'title'},
+      ${fields},
+      ${input.createdByUserId ?? null},
+      ${input.createdByPluginId ?? null},
+      ${input.updatedByUserId ?? input.createdByUserId ?? null}
+    )
+    returning logical_id, name, slug, kind, route_base, singular_label, plural_label,
+              primary_field_id, fields_json, system,
+              created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+  `
+  // NOTE: table creation is pure data access. Entry templates are ordinary
+  // page rows and are created explicitly through the site editor.
+  return mapTable(rows[0])
+}
+
+export async function updateDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  tableId: string,
+  input: UpdateDataTableInput,
+): Promise<DataTable | null> {
+  let fields: DataField[] | null = null
+  if (input.fields !== undefined) {
+    const existing = await getDataTable(db, scope, tableId)
+    if (!existing) return null
+    fields = keepPostTypeBuiltIns(existing, normalizeDataTableFields(input.fields))
+  }
+  const routeBase = input.routeBase === undefined ? null : normalizeExplicitRouteBase(input.routeBase)
+  const { rows } = await db<DataTableRow>`
+    update data_tables
+    set name = coalesce(${input.name ?? null}, name),
+        slug = coalesce(${input.slug ?? null}, slug),
+        route_base = coalesce(${routeBase}, route_base),
+        singular_label = coalesce(${input.singularLabel ?? null}, singular_label),
+        plural_label = coalesce(${input.pluralLabel ?? null}, plural_label),
+        primary_field_id = coalesce(${input.primaryFieldId ?? null}, primary_field_id),
+        fields_json = coalesce(${fields}, fields_json),
+        updated_by_user_id = coalesce(${input.updatedByUserId ?? null}, updated_by_user_id),
+        updated_at = ${nowIso()}
+    where id = ${physicalId(scope.branchId, tableId)}
+      and branch_id = ${scope.branchId}
+      and deleted_at is null
+    returning logical_id, name, slug, kind, route_base, singular_label, plural_label,
+              primary_field_id, fields_json, system,
+              created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}
+
+/**
+ * Insert a table only if its id does not already exist. Returns `true` when
+ * the table was inserted, `false` when it was skipped (id conflict). Used by
+ * the `merge-add` and `merge-overwrite` import strategies.
+ *
+ * RETURNING id is supported by both Postgres and SQLite.
+ */
+export async function insertDataTableIfAbsent(
+  db: DbClient,
+  scope: BranchScope,
+  input: CreateDataTableInput,
+): Promise<boolean> {
+  // Same seeding as createDataTable: `merge-add` / `merge-overwrite` is an
+  // import, and an imported post type has to be routable too.
+  const fields = withPostTypeBuiltIns(input.kind, normalizeDataTableFields(input.fields ?? []))
+  const logicalId = input.id ?? nanoid()
+  const { rows } = await db<{ id: string }>`
+    insert into data_tables (
+      id,
+      branch_id,
+      name,
+      slug,
+      kind,
+      route_base,
+      singular_label,
+      plural_label,
+      primary_field_id,
+      fields_json,
+      created_by_user_id,
+      created_by_plugin_id,
+      updated_by_user_id
+    )
+    values (
+      ${physicalId(scope.branchId, logicalId)},
+      ${scope.branchId},
+      ${input.name},
+      ${input.slug},
+      ${input.kind ?? 'data'},
+      ${routeBaseForCreate(input.routeBase, input.slug)},
+      ${input.singularLabel},
+      ${input.pluralLabel},
+      ${input.primaryFieldId ?? 'title'},
+      ${fields},
+      ${input.createdByUserId ?? null},
+      ${input.createdByPluginId ?? null},
+      ${input.updatedByUserId ?? input.createdByUserId ?? null}
+    )
+    on conflict (id) do nothing
+    returning id
+  `
+  return rows.length > 0
+}
+
+/**
+ * Refuses to delete system tables or any table that still has non-deleted
+ * rows. Both guards live in the repository so other callers (CLI tools,
+ * future migrations) inherit the safety check.
+ *
+ * System status is determined by `table.system === true` (the `system` column,
+ * `not null default false`, surfaced through `mapTable`).
+ */
+export async function softDeleteDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  tableId: string,
+  actorUserId: string | null = null,
+): Promise<DataTable | null> {
+  const table = await getDataTable(db, scope, tableId)
+  if (!table) return null
+  if (table.system === true) return null
+
+  if (await countDataRows(db, scope, tableId) > 0) return null
+
+  const now = nowIso()
+  const { rows } = await db<DataTableRow>`
+    update data_tables
+    set deleted_at = ${now},
+        updated_by_user_id = ${actorUserId},
+        updated_at = ${now}
+    where id = ${physicalId(scope.branchId, tableId)}
+      and branch_id = ${scope.branchId}
+      and deleted_at is null
+    returning logical_id, name, slug, kind, route_base, singular_label, plural_label,
+              primary_field_id, fields_json, system,
+              created_by_user_id, updated_by_user_id, created_at, updated_at
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}
+
+/** The soft-deleted table with this id, the one `restoreDataTable` brings back. */
+async function getDeletedDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  tableId: string,
+): Promise<DataTable | null> {
+  const { rows } = await db<DataTableRow>`
+    select logical_id, name, slug, kind, route_base, singular_label, plural_label,
+           primary_field_id, fields_json, system,
+           created_by_user_id, updated_by_user_id, created_at, updated_at
+    from data_tables
+    where id = ${physicalId(scope.branchId, tableId)}
+      and branch_id = ${scope.branchId}
+      and deleted_at is not null
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}
+
+/**
+ * Bring a soft-deleted table back with new settings — the merge engine's
+ * path when a branch re-creates a table the target side had deleted. Null
+ * when no soft-deleted table has this id on the branch. The incoming field
+ * list replaces the stored one under the same hold as a PATCH: a post type
+ * keeps `title` and `slug` however the other side shaped it.
+ */
+export async function restoreDataTable(
+  db: DbClient,
+  scope: BranchScope,
+  tableId: string,
+  input: UpdateDataTableInput,
+): Promise<DataTable | null> {
+  const stored = await getDeletedDataTable(db, scope, tableId)
+  if (!stored) return null
+  const fields = input.fields !== undefined ? keepPostTypeBuiltIns(stored, normalizeDataTableFields(input.fields)) : null
+  const { rows } = await db<DataTableRow>`
+    update data_tables
+    set deleted_at = null,
+        name = coalesce(${input.name ?? null}, name),
+        slug = coalesce(${input.slug ?? null}, slug),
+        route_base = coalesce(${input.routeBase ?? null}, route_base),
+        singular_label = coalesce(${input.singularLabel ?? null}, singular_label),
+        plural_label = coalesce(${input.pluralLabel ?? null}, plural_label),
+        primary_field_id = coalesce(${input.primaryFieldId ?? null}, primary_field_id),
+        fields_json = coalesce(${fields}, fields_json),
+        updated_by_user_id = coalesce(${input.updatedByUserId ?? null}, updated_by_user_id),
+        updated_at = ${nowIso()}
+    where id = ${physicalId(scope.branchId, tableId)}
+      and branch_id = ${scope.branchId}
+      and deleted_at is not null
+    returning logical_id, name, slug, kind, route_base, singular_label, plural_label,
+              primary_field_id, fields_json, system,
+              created_by_user_id, created_by_plugin_id, updated_by_user_id, created_at, updated_at
+  `
+  return rows[0] ? mapTable(rows[0]) : null
+}

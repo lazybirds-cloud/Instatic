@@ -1,0 +1,83 @@
+/* DynamicBindingControl — binding affordance and bound-value display */
+
+.affordanceWrapper {
+    position: relative;
+}
+
+.affordanceBtn {
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 80ms ease;
+    padding: 0;
+    min-width: 18px;
+    min-height: 18px;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+}
+
+.affordanceWrapper:hover .affordanceBtn,
+.affordanceWrapper:focus-within .affordanceBtn {
+    opacity: 0.7;
+}
+
+.affordanceWrapper:hover .affordanceBtn:hover,
+.affordanceWrapper:focus-within .affordanceBtn:focus {
+    opacity: 1;
+}
+
+.affordanceWrapperActive .affordanceBtn {
+    opacity: 1;
+}
+
+.boundWrapper {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: var(--space-3xs);
+    width: 100%;
+    min-height: 28px;
+}
+
+.boundWrapperStacked {
+    grid-template-columns: 1fr;
+    gap: var(--space-xs);
+}
+
+.boundValueRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px;
+    gap: var(--space-3xs);
+    min-width: 0;
+}
+
+.boundValueDisplay {
+    min-width: 0;
+    min-height: 30px;
+    overflow: hidden;
+    border: 1px solid
+        color-mix(in srgb, var(--overlay) 48%, var(--border));
+    border-radius: var(--radius);
+    background:
+        repeating-linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--overlay) 8%, transparent) 0,
+            color-mix(in srgb, var(--overlay) 8%, transparent) 9px,
+            transparent 9px,
+            transparent 18px
+        ),
+        color-mix(in srgb, var(--overlay) 22%, var(--bg-surface));
+    color: var(--text);
+    cursor: default;
+    font: inherit;
+    font-size: var(--text-s);
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.2;
+    padding: 0 var(--space-m);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

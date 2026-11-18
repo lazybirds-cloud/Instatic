@@ -68,6 +68,7 @@ export interface AgentSlice {
   closeAgent(): void
   toggleAgent(): void
   sendAgentMessage(content: AiUserContentBlock[]): Promise<{ accepted: boolean }>
+  retryLastAgentTurn(): Promise<{ accepted: boolean }>
   abortAgent(): void
   clearAgentMessages(): void
   loadAgentConversations(): Promise<void>

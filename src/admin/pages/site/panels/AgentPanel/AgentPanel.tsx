@@ -90,6 +90,7 @@ export function AgentPanel({
   const providerPending = useAgentStore((s) => s.isAgentProviderPending)
   const messages = useAgentStore((s) => s.agentMessages)
   const agentError = useAgentStore((s) => s.agentError)
+  const retryLastAgentTurn = useAgentStore((s) => s.retryLastAgentTurn)
   const closeAgent = useAgentStore((s) => s.closeAgent)
   const startNewAgentConversation = useAgentStore((s) => s.startNewAgentConversation)
   const loadScopeDefault = useAgentStore((s) => s.loadScopeDefault)
@@ -219,7 +220,7 @@ export function AgentPanel({
     <aside
       ref={setPanelRef}
       role="complementary"
-      aria-label="AI Assistant"
+      aria-label="Assistente de IA"
       data-panel=""
       tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
@@ -241,7 +242,7 @@ export function AgentPanel({
       {/* ── Shared Panel Header — drag handle + close + clear actions ──────── */}
       <PanelHeader
         panelId="agent"
-        title="AI Assistant"
+        title="Assistente de IA"
         onClose={closeAgent}
         dragHandleProps={dragHandleProps ?? (variant === 'floating' ? headerDragProps : undefined)}
       >
@@ -254,8 +255,8 @@ export function AgentPanel({
           iconOnly
           disabled={isStreaming || conversationPending || providerPending}
           onClick={startNewAgentConversation}
-          tooltip="New chat"
-          aria-label="New chat"
+          tooltip="Novo chat"
+          aria-label="Novo chat"
           data-testid="agent-new-chat-header-button"
         >
           <EditSolidIcon size={14} />
@@ -263,19 +264,19 @@ export function AgentPanel({
         {isStreaming && (
           <span className={styles.streamingBadge}>
             <span className={styles.streamingDot} aria-hidden="true" />
-            Working…
+            Trabalhando…
           </span>
         )}
         {/* "AI settings" — always available; routes to /admin/ai. */}
         <AgentSettingsButton
           variant="header"
-          label="AI settings"
+          label="Configurações de IA"
           data-testid="agent-settings-header-button"
         />
         {onToggleMode && (
           <PanelModeButton
             mode={mode}
-            panelLabel="AI Assistant"
+            panelLabel="Assistente de IA"
             dockLocation="left sidebar"
             onToggle={onToggleMode}
           />
@@ -313,7 +314,17 @@ export function AgentPanel({
             no-credential message (which renders via the setup empty state). */}
         {agentError && !noProviderError && (
           <div role="alert" className={styles.errorBanner}>
-            {agentError}
+            <p className={styles.errorBannerText}>{agentErrorCopy(agentError)}</p>
+            {!isStreaming && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => { void retryLastAgentTurn() }}
+                data-testid="agent-retry-button"
+              >
+                Tentar de novo
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -582,6 +593,25 @@ const MarkdownTextBubble = memo(function MarkdownTextBubble({
 })
 
 // ---------------------------------------------------------------------------
+// Error copy (PT-BR): map the transport-class failures the panel sees into
+// actionable copy. Unknown errors pass through untouched.
+// ---------------------------------------------------------------------------
+
+const ERROR_COPY: Array<[RegExp, string]> = [
+  [/socket connection was closed|econnreset|stream error/i, 'A conexão com o servidor caiu no meio do turno. O processo continua no servidor — recarregue para ver o resultado.'],
+  [/gateway timeout|504|upstream request timeout/i, 'Tempo esgotado no gateway (turno longo). Aumente o limite ou tente pedidos menores em sequência.'],
+  [/timed out|timeout/i, 'Tempo esgotado esperando o modelo. Tente de novo.'],
+  [/no ai provider/i, 'Nenhum provedor de IA configurado.'],
+]
+
+function agentErrorCopy(raw: string): string {
+  for (const [pattern, copy] of ERROR_COPY) {
+    if (pattern.test(raw)) return copy
+  }
+  return raw
+}
+
+// ---------------------------------------------------------------------------
 // Empty state
 // ---------------------------------------------------------------------------
 
@@ -593,9 +623,9 @@ function AgentEmptyState({ mode }: { mode: ComposerLockReason | 'prompt' }) {
         size="large"
         role="alert"
         icon={<AiSettingsSolidIcon size={34} />}
-        title="Connect an AI provider"
-        description="Add a provider credential, then choose a default model before starting a chat."
-        action={<AgentSettingsButton variant="emptyState" label="Open AI settings" />}
+        title="Conecte um provedor de IA"
+        description="Adicione uma credencial de provedor e escolha um modelo padrão antes de iniciar um chat."
+        action={<AgentSettingsButton variant="emptyState" label="Abrir configurações de IA" />}
       />
     )
   }
@@ -607,9 +637,9 @@ function AgentEmptyState({ mode }: { mode: ComposerLockReason | 'prompt' }) {
         size="large"
         role="alert"
         icon={<AiSettingsSolidIcon size={34} />}
-        title="Choose a model to get started"
-        description="Pick a model below, or set a default in AI settings so it's ready every time you open this chat."
-        action={<AgentSettingsButton variant="emptyState" label="Set a default in AI settings" />}
+        title="Escolha um modelo para começar"
+        description="Escolha um modelo abaixo, ou defina um padrão nas configurações de IA para ficar pronto sempre que abrir este chat."
+        action={<AgentSettingsButton variant="emptyState" label="Definir um padrão nas configurações de IA" />}
       />
     )
   }
@@ -619,8 +649,8 @@ function AgentEmptyState({ mode }: { mode: ComposerLockReason | 'prompt' }) {
       variant="centered"
       size="large"
       icon={<AiBoxSolidIcon size={28} color="var(--text-disabled)" />}
-      title="Describe what you want to build and I'll do it for you."
-      description={'Try: "Add a hero section with a heading and button"'}
+      title="Descreva o que quer construir e eu faço para você."
+      description={'Ex.: "Adicione uma seção hero com um título e um botão"'}
     />
   )
 }
@@ -630,12 +660,12 @@ function AgentCredentialAlert({ mode }: { mode: ComposerLockReason }) {
     <div role="alert" className={styles.credentialAlert}>
       <p className={styles.credentialAlertText}>
         {mode === 'setup'
-          ? 'No AI provider credentials are configured yet.'
-          : 'Choose a model below, or set a default in AI settings.'}
+          ? 'Nenhuma credencial de IA configurada ainda.'
+          : 'Escolha um modelo abaixo, ou defina um padrão nas configurações de IA.'}
       </p>
       <AgentSettingsButton
         variant="inline"
-        label={mode === 'setup' ? 'Open AI settings' : 'Set a default'}
+        label={mode === 'setup' ? 'Abrir configurações de IA' : 'Definir um padrão'}
       />
     </div>
   )
